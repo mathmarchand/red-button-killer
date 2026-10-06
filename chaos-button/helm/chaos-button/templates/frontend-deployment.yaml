@@ -26,6 +26,15 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.frontend.port }}
+          env:
+            # nginx inside this pod proxies "/api/*" to the backend's
+            # ClusterIP Service - this is what replaced the old Ingress.
+            - name: BACKEND_HOST
+              value: {{ include "chaos-button.fullname" . }}-backend
+            - name: BACKEND_PORT
+              value: {{ .Values.service.backend.port | quote }}
+            - name: LISTEN_PORT
+              value: {{ .Values.frontend.port | quote }}
           readinessProbe:
             tcpSocket:
               port: http

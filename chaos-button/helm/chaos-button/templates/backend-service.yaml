@@ -6,12 +6,14 @@ metadata:
     {{- include "chaos-button.labels" . | nindent 4 }}
     app.kubernetes.io/component: backend
 spec:
-  type: {{ .Values.service.type }}
+  # Deliberately not externally exposed: the frontend's nginx proxies
+  # "/api/*" to this Service from inside the cluster.
+  type: {{ .Values.service.backend.type }}
   selector:
     app.kubernetes.io/name: {{ include "chaos-button.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/component: backend
   ports:
     - name: http
-      port: {{ .Values.service.backendPort }}
+      port: {{ .Values.service.backend.port }}
       targetPort: http

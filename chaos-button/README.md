@@ -15,30 +15,36 @@ backend pod, so `kubectl logs` on that pod is your audit trail.
 ## Architecture
 
 ```
-┌─────────────┐        /api/*        ┌─────────────┐
-│  frontend    │ ───────────────────▶ │  backend     │
-│ (static UI,  │                      │ (FastAPI)    │
-│  big red btn)│                      │              │
-└─────────────┘                      └──────┬───────┘
-                                             │
-                     reads/writes            │  Secrets in its own
-                     resource catalog        ▼  namespace (RBAC-scoped)
-                                      Kubernetes Secrets
-                                             │
-                      ┌──────────────────────┴───────────────────────┐
-                      │                                              │
-               MAAS resource secret                         k8s_pod resource secret
-         (url, oauth_key, system_id)              (kubeconfig, namespace, pod_name)
-                      │                                              │
-                      ▼                                              ▼
-              MAAS API: power_off                     Target cluster API: delete pod
-              (via requests + OAuth1)                  (via kubeconfig in the secret)
+                 external traffic (LoadBalancer)
+                            │
+                            ▼
+┌───────────────────────────────────────┐        /api/*        ┌─────────────┐
+│  frontend (nginx)                       │ ───────────────────▶ │  backend     │
+│  - serves the static UI                 │   (in-cluster only)   │ (FastAPI)    │
+│  - reverse-proxies "/api/*" to backend  │                      │              │
+└───────────────────────────────────────┘                      └──────┬───────┘
+                                                                        │
+                                              reads/writes              │  Secrets in its own
+                                              resource catalog          ▼  namespace (RBAC-scoped)
+                                                                 Kubernetes Secrets
+                                                                        │
+                                 ┌──────────────────────────────────────┴───────────────────────┐
+                                 │                                                                │
+                          MAAS resource secret                                         k8s_pod resource secret
+                    (url, oauth_key, system_id)                              (kubeconfig, namespace, pod_name)
+                                 │                                                                │
+                                 ▼                                                                ▼
+                         MAAS API: power_off                                      Target cluster API: delete pod
+                         (via requests + OAuth1)                                    (via kubeconfig in the secret)
 ```
 
 Both the frontend and backend are separate Deployments/Services so they
-scale and update independently. An optional Ingress exposes the frontend
-at `/` and the backend at `/api` on the same host (so the frontend's
-relative `fetch('/api/...')` calls just work).
+scale and update independently. The frontend's nginx is the *only*
+externally-exposed piece (via a `LoadBalancer` Service) — it serves the
+static UI and reverse-proxies `/api/*` to the backend's `ClusterIP`
+Service from inside the cluster, so the frontend's relative
+`fetch('/api/...')` calls just work, and the backend is never directly
+reachable from outside the cluster.
 
 Resources are stored as **Kubernetes Secrets** (one per resource) in the
 release namespace, labeled so the backend can list them with a label
@@ -140,18 +146,27 @@ helm install chaos-button helm/chaos-button \
   --namespace chaos-button --create-namespace \
   --set image.registry=<registry>/ \
   --set image.backend.tag=0.1.0 \
-  --set image.frontend.tag=0.1.0 \
-  --set ingress.enabled=true \
-  --set ingress.host=chaos.example.com
+  --set image.frontend.tag=0.1.0
 ```
 
-Without an Ingress, use port-forwarding (see the post-install `NOTES.txt`
+The frontend Service defaults to `type: LoadBalancer`. Once your cloud
+provider assigns it an external IP (see the post-install `NOTES.txt`
 printed by Helm):
 
 ```bash
-kubectl -n chaos-button port-forward svc/chaos-button-frontend 8080:80
-kubectl -n chaos-button port-forward svc/chaos-button-backend 8081:8080
+kubectl -n chaos-button get svc chaos-button-frontend -w
 ```
+
+...browse to `http://<EXTERNAL-IP>/`. On clusters without a cloud
+load-balancer (plain kind/minikube without MetalLB), `EXTERNAL-IP` stays
+`<pending>` — fall back to port-forwarding instead:
+
+```bash
+kubectl -n chaos-button port-forward svc/chaos-button-frontend 8080:80
+```
+
+(No need to separately port-forward the backend — nginx inside the
+frontend pod proxies `/api/*` to it internally.)
 
 ### Bootstrapping resources via Helm values
 
@@ -202,9 +217,10 @@ Example log lines:
 | `backend.replicaCount`       | `1`                            | Backend replica count                              |
 | `backend.logLevel`           | `INFO`                        | Python logging level                               |
 | `frontend.replicaCount`      | `1`                            | Frontend replica count                             |
-| `service.type`               | `ClusterIP`                   | Service type for both frontend/backend             |
-| `ingress.enabled`            | `false`                        | Create an Ingress covering `/` and `/api`          |
-| `ingress.host`               | `chaos-button.local`           | Ingress hostname                                   |
+| `service.backend.type`       | `ClusterIP`                    | Backend Service type (internal only, don't change) |
+| `service.backend.port`       | `8080`                         | Backend Service port                               |
+| `service.frontend.type`      | `LoadBalancer`                 | Frontend Service type (the external entry point)   |
+| `service.frontend.port`      | `80`                           | Frontend Service port                              |
 | `serviceAccount.create`      | `true`                         | Create a dedicated ServiceAccount for the backend  |
 | `rbac.create`                | `true`                         | Create the Role/RoleBinding for managing Secrets   |
 | `resources`                  | `[]`                           | Resources to bootstrap as Secrets at install time  |
@@ -222,7 +238,17 @@ export POD_NAMESPACE=default
 uvicorn main:app --reload --port 8080
 ```
 
-Serve the frontend separately and point your browser/Ingress/proxy such
-that `/api` reaches the backend (e.g. `cd frontend && python3 -m http.server 8081`,
-plus any simple reverse proxy, or just use `curl` against the API
-directly while developing).
+Serve the frontend separately — e.g. build and run its Docker image
+pointed at your locally-running backend:
+
+```bash
+cd frontend
+docker build -t chaos-button-frontend:dev .
+docker run --rm -p 8081:8080 \
+  -e BACKEND_HOST=host.docker.internal -e BACKEND_PORT=8080 \
+  chaos-button-frontend:dev
+```
+
+Then browse to `http://localhost:8081` — nginx proxies its `/api/*`
+requests straight through to the backend running on your host. (Or just
+`curl` the backend directly on `:8080` while developing.)

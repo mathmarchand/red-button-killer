@@ -1,30 +1,43 @@
 Chaos Button has been deployed!
 
-Backend API Service:  {{ include "chaos-button.fullname" . }}-backend.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.backendPort }}
-Frontend Service:     {{ include "chaos-button.fullname" . }}-frontend.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.frontendPort }}
+Backend API Service (internal only): {{ include "chaos-button.fullname" . }}-backend.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.backend.port }}
+Frontend Service ({{ .Values.service.frontend.type }}):    {{ include "chaos-button.fullname" . }}-frontend.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.frontend.port }}
 
-{{- if .Values.ingress.enabled }}
+The frontend's nginx serves the UI *and* reverse-proxies "/api/*" to the
+backend internally, so the frontend Service is the only thing you need
+exposed externally. The backend stays ClusterIP-only.
 
-Access the UI at: http://{{ .Values.ingress.host }}/
-The API is reachable at: http://{{ .Values.ingress.host }}/api
+{{- if eq .Values.service.frontend.type "LoadBalancer" }}
+
+Get the external IP (may stay <pending> for a minute, or indefinitely on
+clusters without a cloud load-balancer, e.g. plain kind/minikube):
+
+  kubectl -n {{ .Release.Namespace }} get svc {{ include "chaos-button.fullname" . }}-frontend -w
+
+Once an EXTERNAL-IP is assigned, browse to:
+
+  http://<EXTERNAL-IP>:{{ .Values.service.frontend.port }}
+
+If EXTERNAL-IP stays <pending> (no cloud LB available), fall back to:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "chaos-button.fullname" . }}-frontend 8080:{{ .Values.service.frontend.port }}
+
+...and browse to http://localhost:8080 - "/api" calls are proxied the
+same way either way, since that happens inside the frontend pod.
 {{- else }}
 
-Ingress is disabled. Access it locally with:
+Access it locally with:
 
-  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "chaos-button.fullname" . }}-frontend 8080:{{ .Values.service.frontendPort }}
-  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "chaos-button.fullname" . }}-backend 8081:{{ .Values.service.backendPort }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "chaos-button.fullname" . }}-frontend 8080:{{ .Values.service.frontend.port }}
 
-Then browse to http://localhost:8080 (note: the frontend calls the API via
-relative "/api" paths, so without an Ingress you'll want to also expose the
-backend under the same host/path, e.g. via `kubectl port-forward` plus a
-local reverse proxy, or simply enable the Ingress).
+Then browse to http://localhost:8080
 {{- end }}
 
 Watch the kill log in real time:
 
   kubectl -n {{ .Release.Namespace }} logs -f deploy/{{ include "chaos-button.fullname" . }}-backend
 
-Manage resources via the API directly, e.g.:
+Manage resources via the API directly (through the frontend's proxy), e.g.:
 
   curl -X POST http://<host>/api/resources \
     -H 'Content-Type: application/json' \

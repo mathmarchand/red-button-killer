@@ -30,17 +30,19 @@ frontend:
   port: 8080
   resources: {}
 
+# The frontend is the single external entry point: its nginx proxies
+# "/api/*" to the backend's ClusterIP Service internally, so only the
+# frontend needs to be reachable from outside the cluster. On clusters
+# without a cloud load-balancer (e.g. kind/minikube without MetalLB),
+# the frontend's EXTERNAL-IP will stay <pending> - use `kubectl port-forward`
+# or `minikube tunnel` as a fallback (see the NOTES after install).
 service:
-  type: ClusterIP
-  backendPort: 8080
-  frontendPort: 80
-
-ingress:
-  enabled: false
-  className: ""
-  annotations: {}
-  host: chaos-button.local
-  tls: []
+  backend:
+    type: ClusterIP
+    port: 8080
+  frontend:
+    type: LoadBalancer
+    port: 80
 
 serviceAccount:
   create: true
