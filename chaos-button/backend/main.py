@@ -2,13 +2,19 @@
 Chaos Button backend API.
 
 Provides:
-  * CRUD endpoints for "resources" (MAAS machines or Kubernetes pods),
-    persisted as Kubernetes Secrets in the release namespace.
+  * CRUD endpoints for "resources" (MAAS machines, Kubernetes pods, or
+    Kubernetes Deployments), persisted as Kubernetes Secrets in the
+    release namespace.
   * A /api/kill endpoint ("the big red button") that picks a random
     registered resource and destroys it:
-      - MAAS machine  -> calls the MAAS API to power off the machine.
-      - Kubernetes pod -> connects to the target cluster using the stored
-        kubeconfig and deletes the pod.
+      - MAAS machine         -> calls the MAAS API to power off the machine.
+      - Kubernetes pod       -> connects to the target cluster using the
+        stored kubeconfig and deletes that specific pod.
+      - Kubernetes Deployment -> connects to the target cluster, finds the
+        Deployment's current replica pods, and deletes one of them at
+        random. The Deployment itself is never touched, so its controller
+        simply reschedules the replica and the resource stays valid for
+        the next kill.
 
 Everything of interest is logged to stdout so it shows up via
 `kubectl logs` on the backend pod.
@@ -21,6 +27,7 @@ import random
 import re
 import sys
 import tempfile
+from contextlib import contextmanager
 from typing import List, Literal, Union
 
 import requests
@@ -106,7 +113,15 @@ class K8sPodResource(BaseModel):
     pod_name: str
 
 
-ResourceCreate = Union[MaasResource, K8sPodResource]
+class K8sDeploymentResource(BaseModel):
+    type: Literal["k8s_deployment"] = "k8s_deployment"
+    name: str
+    kubeconfig: str
+    namespace: str
+    deployment_name: str
+
+
+ResourceCreate = Union[MaasResource, K8sPodResource, K8sDeploymentResource]
 
 
 class ResourceSummary(BaseModel):
@@ -144,6 +159,12 @@ def _secret_to_summary(secret) -> ResourceSummary:
         details = {
             "namespace": data.get("namespace"),
             "pod_name": data.get("pod_name"),
+            "kubeconfig": "***redacted***",
+        }
+    elif rtype == "k8s_deployment":
+        details = {
+            "namespace": data.get("namespace"),
+            "deployment_name": data.get("deployment_name"),
             "kubeconfig": "***redacted***",
         }
     else:
@@ -247,27 +268,88 @@ def _kill_maas(data: dict) -> str:
     return f"MAAS machine (system_id={system_id}) powered off"
 
 
-def _kill_k8s_pod(data: dict) -> str:
-    kubeconfig_yaml = data["kubeconfig"]
-    namespace = data["namespace"]
-    pod_name = data["pod_name"]
-
+@contextmanager
+def _target_api_client(kubeconfig_yaml: str):
+    """Build an ApiClient for a *target* cluster from a kubeconfig string
+    stored in a resource's secret (as opposed to _load_k8s_api(), which
+    uses this pod's own ServiceAccount to manage our own Secrets)."""
     fd, kubeconfig_path = tempfile.mkstemp(suffix=".yaml")
     try:
         with os.fdopen(fd, "w") as f:
             f.write(kubeconfig_yaml)
-
         target_config = k8s_client.Configuration()
         k8s_config.load_kube_config(config_file=kubeconfig_path, client_configuration=target_config)
-        target_api = k8s_client.CoreV1Api(k8s_client.ApiClient(target_config))
-        target_api.delete_namespaced_pod(name=pod_name, namespace=namespace)
-    except ApiException as e:
-        log.error("Failed to delete pod %s/%s: %s", namespace, pod_name, e)
-        raise HTTPException(status_code=502, detail=f"Kubernetes API error: {e.reason}")
+        yield k8s_client.ApiClient(target_config)
     finally:
         os.unlink(kubeconfig_path)
 
+
+def _kill_k8s_pod(data: dict) -> str:
+    namespace = data["namespace"]
+    pod_name = data["pod_name"]
+
+    try:
+        with _target_api_client(data["kubeconfig"]) as api_client:
+            k8s_client.CoreV1Api(api_client).delete_namespaced_pod(name=pod_name, namespace=namespace)
+    except ApiException as e:
+        log.error("Failed to delete pod %s/%s: %s", namespace, pod_name, e)
+        raise HTTPException(status_code=502, detail=f"Kubernetes API error: {e.reason}")
+
     return f"Pod '{pod_name}' in namespace '{namespace}' deleted"
+
+
+def _kill_k8s_deployment(data: dict) -> str:
+    """Delete one random replica pod belonging to a Deployment, without
+    touching the Deployment itself. The Deployment's controller notices
+    the missing replica and reschedules it, so this resource stays valid
+    for the next press of the button too."""
+    namespace = data["namespace"]
+    deployment_name = data["deployment_name"]
+
+    try:
+        with _target_api_client(data["kubeconfig"]) as api_client:
+            apps_api = k8s_client.AppsV1Api(api_client)
+            core_api = k8s_client.CoreV1Api(api_client)
+
+            try:
+                deployment = apps_api.read_namespaced_deployment(deployment_name, namespace)
+            except ApiException as e:
+                if e.status == 404:
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Deployment '{deployment_name}' not found in namespace '{namespace}'",
+                    )
+                raise
+
+            match_labels = (deployment.spec.selector.match_labels or {}) if deployment.spec.selector else {}
+            if not match_labels:
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        f"Deployment '{deployment_name}' has no matchLabels selector; "
+                        "cannot find its replica pods"
+                    ),
+                )
+            label_selector = ",".join(f"{k}={v}" for k, v in match_labels.items())
+
+            pods = core_api.list_namespaced_pod(namespace, label_selector=label_selector).items
+            if not pods:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Deployment '{deployment_name}' currently has no running replica pods to kill",
+                )
+
+            victim = random.choice(pods)
+            core_api.delete_namespaced_pod(name=victim.metadata.name, namespace=namespace)
+    except ApiException as e:
+        log.error("Failed to kill a replica of Deployment %s/%s: %s", namespace, deployment_name, e)
+        raise HTTPException(status_code=502, detail=f"Kubernetes API error: {e.reason}")
+
+    return (
+        f"Pod '{victim.metadata.name}' (one of {len(pods)} replicas of Deployment "
+        f"'{deployment_name}' in namespace '{namespace}') deleted; the Deployment "
+        "will reschedule it"
+    )
 
 
 def press_the_button() -> KillResult:
@@ -289,6 +371,8 @@ def press_the_button() -> KillResult:
         message = _kill_maas(data)
     elif rtype == "k8s_pod":
         message = _kill_k8s_pod(data)
+    elif rtype == "k8s_deployment":
+        message = _kill_k8s_deployment(data)
     else:
         raise HTTPException(status_code=500, detail=f"unknown resource type '{rtype}'")
 
@@ -335,8 +419,10 @@ def api_create_resource(payload: dict):
             model: ResourceCreate = MaasResource(**payload)
         elif rtype == "k8s_pod":
             model = K8sPodResource(**payload)
+        elif rtype == "k8s_deployment":
+            model = K8sDeploymentResource(**payload)
         else:
-            raise HTTPException(status_code=400, detail="type must be 'maas' or 'k8s_pod'")
+            raise HTTPException(status_code=400, detail="type must be 'maas', 'k8s_pod', or 'k8s_deployment'")
     except ValidationError as e:
         raise HTTPException(status_code=400, detail=e.errors())
 

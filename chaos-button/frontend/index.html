@@ -28,6 +28,7 @@
           <select id="resource-type">
             <option value="maas">MAAS machine</option>
             <option value="k8s_pod">Kubernetes pod</option>
+            <option value="k8s_deployment">Kubernetes Deployment (kills one replica, deployment survives)</option>
           </select>
         </label>
 
@@ -47,6 +48,17 @@
           <label>Pod name: <input id="k8s-podname" type="text" /></label>
           <label>Kubeconfig (YAML):
             <textarea id="k8s-kubeconfig" rows="6" placeholder="apiVersion: v1&#10;..."></textarea>
+          </label>
+        </div>
+
+        <div id="k8s-deployment-fields">
+          <label>Namespace: <input id="k8sdep-namespace" type="text" /></label>
+          <label>Deployment name: <input id="k8sdep-deploymentname" type="text" /></label>
+          <p class="hint">On kill, one random replica pod of this Deployment is deleted.
+            The Deployment itself is left alone, so it reschedules the replica and this
+            resource stays valid for future kills.</p>
+          <label>Kubeconfig (YAML):
+            <textarea id="k8sdep-kubeconfig" rows="6" placeholder="apiVersion: v1&#10;..."></textarea>
           </label>
         </div>
 

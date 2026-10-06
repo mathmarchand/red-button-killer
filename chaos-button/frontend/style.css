@@ -142,8 +142,15 @@ button[type="submit"],
 }
 
 #maas-fields,
-#k8s-fields {
+#k8s-fields,
+#k8s-deployment-fields {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+.hint {
+  font-size: 0.8rem;
+  color: #999;
+  margin: 0;
 }

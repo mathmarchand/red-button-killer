@@ -1,13 +1,20 @@
 # Chaos Button
 
-A small chaos-engineering app: register "resources" (MAAS machines or
-Kubernetes pods), then press the **Big Red Button** to destroy one of
-them, chosen at random.
+A small chaos-engineering app: register "resources" (MAAS machines,
+Kubernetes pods, or Kubernetes Deployments), then press the **Big Red
+Button** to destroy one of them, chosen at random.
 
 - **MAAS machine** resource → the button calls the MAAS API to power off
   the machine (`system_id`).
 - **Kubernetes pod** resource → the button connects to the target
-  cluster using the stored kubeconfig and deletes the pod.
+  cluster using the stored kubeconfig and deletes that specific pod. If
+  nothing recreates it, this is the last time this resource can usefully
+  be killed.
+- **Kubernetes Deployment** resource → the button connects to the target
+  cluster, finds the Deployment's current replica pods, and deletes one
+  of them at random — never the Deployment itself. Its controller
+  reschedules the replica automatically, so the resource stays valid and
+  can be killed again and again.
 
 Every kill (what was picked, and the outcome) is logged to stdout on the
 backend pod, so `kubectl logs` on that pod is your audit trail.
@@ -28,14 +35,17 @@ backend pod, so `kubectl logs` on that pod is your audit trail.
                                               resource catalog          ▼  namespace (RBAC-scoped)
                                                                  Kubernetes Secrets
                                                                         │
-                                 ┌──────────────────────────────────────┴───────────────────────┐
-                                 │                                                                │
-                          MAAS resource secret                                         k8s_pod resource secret
-                    (url, oauth_key, system_id)                              (kubeconfig, namespace, pod_name)
-                                 │                                                                │
-                                 ▼                                                                ▼
-                         MAAS API: power_off                                      Target cluster API: delete pod
-                         (via requests + OAuth1)                                    (via kubeconfig in the secret)
+                                 ┌──────────────────────────┴──────────────────────────┐
+                                 │                                                        │
+                          MAAS resource secret                        k8s_pod / k8s_deployment resource
+                    (url, oauth_key, system_id)                      secret (kubeconfig, namespace, and
+                                 │                                   pod_name or deployment_name)
+                                 ▼                                                        │
+                         MAAS API: power_off                                             ▼
+                         (via requests + OAuth1)                      Target cluster API: delete a pod
+                                                                     (that exact pod, or a random replica
+                                                                      of the Deployment) using the stored
+                                                                                kubeconfig
 ```
 
 Both the frontend and backend are separate Deployments/Services so they
@@ -114,11 +124,32 @@ curl -X POST http://<host>/api/resources \
       }'
 ```
 
+### Create a Kubernetes Deployment resource
+
+Killing this resource deletes one random replica pod of the Deployment —
+not the Deployment itself — so the Deployment's controller reschedules
+the replica and the resource is still there to kill again next time.
+
+```bash
+curl -X POST http://<host>/api/resources \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "type": "k8s_deployment",
+        "name": "payments-api",
+        "namespace": "payments",
+        "deployment_name": "payments-api",
+        "kubeconfig": "apiVersion: v1\nkind: Config\n..."
+      }'
+```
+
 ### Press the button
 
 ```bash
 curl -X POST http://<host>/api/kill
 # {"killed":"payments-worker","type":"k8s_pod","message":"Pod 'payments-worker-7f8d9-abcde' in namespace 'payments' deleted"}
+
+# ...or, for a k8s_deployment resource:
+# {"killed":"payments-api","type":"k8s_deployment","message":"Pod 'payments-api-6f9998dd98-bjxnj' (one of 3 replicas of Deployment 'payments-api' in namespace 'payments') deleted; the Deployment will reschedule it"}
 ```
 
 ## Building the images
@@ -185,6 +216,14 @@ resources:
     name: payments-worker
     namespace: payments
     podName: payments-worker-7f8d9-abcde
+    kubeconfig: |
+      apiVersion: v1
+      kind: Config
+      ...
+  - type: k8s_deployment
+    name: payments-api
+    namespace: payments
+    deploymentName: payments-api
     kubeconfig: |
       apiVersion: v1
       kind: Config
