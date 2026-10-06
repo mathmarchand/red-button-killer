@@ -1,0 +1,33 @@
+Chaos Button has been deployed!
+
+Backend API Service:  {{ include "chaos-button.fullname" . }}-backend.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.backendPort }}
+Frontend Service:     {{ include "chaos-button.fullname" . }}-frontend.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.frontendPort }}
+
+{{- if .Values.ingress.enabled }}
+
+Access the UI at: http://{{ .Values.ingress.host }}/
+The API is reachable at: http://{{ .Values.ingress.host }}/api
+{{- else }}
+
+Ingress is disabled. Access it locally with:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "chaos-button.fullname" . }}-frontend 8080:{{ .Values.service.frontendPort }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "chaos-button.fullname" . }}-backend 8081:{{ .Values.service.backendPort }}
+
+Then browse to http://localhost:8080 (note: the frontend calls the API via
+relative "/api" paths, so without an Ingress you'll want to also expose the
+backend under the same host/path, e.g. via `kubectl port-forward` plus a
+local reverse proxy, or simply enable the Ingress).
+{{- end }}
+
+Watch the kill log in real time:
+
+  kubectl -n {{ .Release.Namespace }} logs -f deploy/{{ include "chaos-button.fullname" . }}-backend
+
+Manage resources via the API directly, e.g.:
+
+  curl -X POST http://<host>/api/resources \
+    -H 'Content-Type: application/json' \
+    -d '{"type":"maas","name":"rack-1","url":"http://maas.example.com:5240/MAAS","oauth_key":"ck:tk:ts","system_id":"abc123"}'
+
+  curl -X POST http://<host>/api/kill

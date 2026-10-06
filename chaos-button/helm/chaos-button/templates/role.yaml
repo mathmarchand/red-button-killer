@@ -1,0 +1,16 @@
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "chaos-button.fullname" . }}-secrets
+  labels:
+    {{- include "chaos-button.labels" . | nindent 4 }}
+rules:
+  # The backend only ever needs to manage its own Secrets (the resource
+  # catalog) in its own namespace. Killing a Kubernetes pod resource is
+  # done with the kubeconfig stored *inside* that resource's Secret, not
+  # with this ServiceAccount's own permissions.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+{{- end }}

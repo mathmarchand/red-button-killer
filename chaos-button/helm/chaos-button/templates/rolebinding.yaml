@@ -1,0 +1,16 @@
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "chaos-button.fullname" . }}-secrets
+  labels:
+    {{- include "chaos-button.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "chaos-button.fullname" . }}-secrets
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "chaos-button.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

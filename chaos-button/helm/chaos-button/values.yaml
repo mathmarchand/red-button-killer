@@ -1,0 +1,74 @@
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  registry: ""     # e.g. "myregistry.example.com/"  (include trailing slash)
+  backend:
+    repository: chaos-button-backend
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  frontend:
+    repository: chaos-button-frontend
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+
+backend:
+  replicaCount: 1
+  port: 8080
+  logLevel: INFO
+  resources: {}
+  # resources:
+  #   limits:
+  #     cpu: 200m
+  #     memory: 256Mi
+  #   requests:
+  #     cpu: 50m
+  #     memory: 64Mi
+
+frontend:
+  replicaCount: 1
+  port: 8080
+  resources: {}
+
+service:
+  type: ClusterIP
+  backendPort: 8080
+  frontendPort: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: chaos-button.local
+  tls: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+rbac:
+  create: true
+
+# Optionally bootstrap resources at install time. Each entry becomes a
+# Kubernetes Secret, exactly as if it had been created through the API.
+# These can still be deleted/re-created later through the Big Red Button UI.
+#
+# resources:
+#   - type: maas
+#     name: rack-server-1
+#     url: http://maas.example.com:5240/MAAS
+#     oauthKey: "consumerKey:tokenKey:tokenSecret"
+#     systemId: abc123
+#   - type: k8s_pod
+#     name: payments-worker
+#     namespace: payments
+#     podName: payments-worker-xyz
+#     kubeconfig: |
+#       apiVersion: v1
+#       clusters:
+#         - cluster:
+#             server: https://example-cluster:6443
+#           name: example
+#       ...
+resources: []

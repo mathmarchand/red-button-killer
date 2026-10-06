@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Chaos Button</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>💥 Chaos Button</h1>
+    <p class="subtitle">Press the button. Something, somewhere, will die.</p>
+  </header>
+
+  <main>
+    <section class="button-section">
+      <button id="big-red-button" title="Kill a random resource">KILL</button>
+      <p id="kill-result"></p>
+    </section>
+
+    <section class="resources-section">
+      <h2>Registered Resources</h2>
+      <ul id="resource-list"></ul>
+
+      <h3>Add a resource</h3>
+      <form id="add-form">
+        <label>
+          Type:
+          <select id="resource-type">
+            <option value="maas">MAAS machine</option>
+            <option value="k8s_pod">Kubernetes pod</option>
+          </select>
+        </label>
+
+        <label>
+          Name:
+          <input id="res-name" type="text" required />
+        </label>
+
+        <div id="maas-fields">
+          <label>MAAS URL: <input id="maas-url" type="text" placeholder="http://maas.example.com:5240/MAAS" /></label>
+          <label>OAuth key: <input id="maas-oauth" type="text" placeholder="consumer_key:token_key:token_secret" /></label>
+          <label>System ID: <input id="maas-systemid" type="text" /></label>
+        </div>
+
+        <div id="k8s-fields">
+          <label>Namespace: <input id="k8s-namespace" type="text" /></label>
+          <label>Pod name: <input id="k8s-podname" type="text" /></label>
+          <label>Kubeconfig (YAML):
+            <textarea id="k8s-kubeconfig" rows="6" placeholder="apiVersion: v1&#10;..."></textarea>
+          </label>
+        </div>
+
+        <button type="submit">Add resource</button>
+      </form>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
